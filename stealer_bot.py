@@ -9,7 +9,7 @@ from flask import Flask, request
 from threading import Thread
 
 # --- CONFIG ---
-TOKEN = 'MTUzMDkwMTU2NTU4MDM3ODIxOA.GBw09R.p-SEjcLzaeVx9JKYvvqS8Rw0Xxv3AG0w7jcN1o'
+TOKEN = 'MTUzMDkwMTU2NTU4MDM3ODIxOA.Gn6mEw.jVIlO_ChKHaNu7uWRbxOeGJXsq7CGx3wuCIUt0'
 DB_FILE = 'logs.db'
 
 # --- GLOBALS ---
